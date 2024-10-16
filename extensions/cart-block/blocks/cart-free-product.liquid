@@ -1,0 +1,119 @@
+<section>
+<p>Top</p>
+</section>
+<script  src="{{ 'track-events.js' | asset_url }}" defer></script>
+<script>
+  const firstProductId = parseInt("{{ app.metafields.cart_free_product.first-product-id }}".split(`/`).pop(), 10);
+  const secondProductId = parseInt("{{ app.metafields.cart_free_product.second-product-id }}".split(`/`).pop(), 10);
+  const freeProductId = parseInt("{{ app.metafields.cart_free_product.free-product-id }}".split('&')[1].split(`/`).pop(), 10);
+  const cartItemsSectionName = 'main-cart-items';
+
+  console.log(firstProductId, secondProductId, 'check')
+  const addFreeProductToCart = async (freeProductVariantId) => {
+    try {
+      const response = await fetch('/cart/add.js', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          items: [
+            {
+              id: freeProductVariantId,
+              quantity: 1,
+            }
+          ]
+        })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        console.error('Error adding free product:', errorData);
+      } else {
+        const data = await response.json();
+        console.log('Free product added:', data);
+      }
+    } catch (error) {
+      console.error('Failed to add free product:', error);
+    }
+  };
+
+  const removeFreeProductFromCart = async (lineItemKey) => {
+    try {
+      const response = await fetch('/cart/change.js', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          id: lineItemKey,
+          quantity: 0,
+        })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        console.error('Error removing free product:', errorData);
+      } else {
+        const data = await response.json();
+        console.log('Free product removed:', data);
+      }
+    } catch (error) {
+      console.error('Failed to remove free product:', error);
+    }
+  };
+
+  const getCartData = async () => {
+    const response = await fetch("/cart.js");
+    const data = await response.json();
+    return data;
+  };
+
+  window.addEventListener('cart:add', async (event) => {
+    const cartData = await getCartData();
+    const cartItems = cartData.items;
+    const isFreeProductInCart = cartItems.find(item => item.id === freeProductId)
+
+    if(isFreeProductInCart) return;
+    const filteredCartItems = cartItems.filter(item => item.product_id === firstProductId || item.product_id === secondProductId);
+    console.log(cartItems)
+    console.log(filteredCartItems, 'filtered')
+
+    if(filteredCartItems.length === 2) {
+      addFreeProductToCart(freeProductId)
+    }
+  })
+
+  window.addEventListener('cart:change', async (event) => {
+    const cartData = await getCartData();
+    const cartItems = cartData.items;
+    const isFreeProductInCart = cartItems.find(item => item.id === freeProductId);
+    if(!isFreeProductInCart) return;
+
+    const filteredCartItems = cartItems.filter(item => item.product_id === firstProductId || item.product_id === secondProductId);
+    console.log(cartItems)
+    console.log(filteredCartItems, 'filtered on change')
+
+    if(filteredCartItems.length < 2) {
+      removeFreeProductFromCart(freeProductId.toString())
+    }
+
+  })
+
+
+</script>
+
+{% schema %}
+{
+  "name": "Cart Free product",
+  "target": "body",
+  "settings": [
+    {
+      "type": "text",
+      "id": "cart_items_section_name",
+      "label": "Cart items section name"
+    }
+  ]
+}
+{% endschema %}
+

@@ -1,329 +1,177 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
+import { defer, useFetcher, useLoaderData } from "@remix-run/react";
 import { json } from "@remix-run/node";
-import { useFetcher } from "@remix-run/react";
+
 import {
   Page,
   Layout,
-  Text,
+  Select,
   Card,
   Button,
   BlockStack,
-  Box,
-  List,
-  Link,
-  InlineStack,
 } from "@shopify/polaris";
-import { TitleBar, useAppBridge } from "@shopify/app-bridge-react";
+import { TitleBar } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
+import { ShopifyAdminGraphqlAppMetafieldsService} from '../services//app-metafields.service'
+import { SHOPIFY_CART_FREE_PRODUCT_APP_DISCOUNT_CODE_METAFIELD_KEY, SHOPIFY_CART_FREE_PRODUCT_APP_FIRST_PRODUCT_METAFIELD_KEY, SHOPIFY_CART_FREE_PRODUCT_APP_FREE_PRODUCT_METAFIELD_KEY, SHOPIFY_CART_FREE_PRODUCT_APP_METAFIELDS_NAMESPACE, SHOPIFY_CART_FREE_PRODUCT_APP_SECOND_PRODUCT_METAFIELD_KEY } from "../constants";
+import { ShopifyAdminGraphqlAppProductsService } from "../services/app-product.service";
+import { ShopifyAdminGraphqlAppDiscountService } from "../services/app-discount.service";
 
 export const loader = async ({ request }) => {
   await authenticate.admin(request);
+  const { admin } = await authenticate.admin(request);
 
-  return null;
+  //Getting products
+  const productsResponse = await ShopifyAdminGraphqlAppProductsService.getProducts(admin.graphql);
+
+  const products = productsResponse.products.edges.map(({ node }) => ({
+    label: node.title,
+    value: node.id,
+  }));
+  const productVariants = productsResponse.products.edges;
+
+  //Getting all app metafields
+  const firstProductMetafieldResponse = await ShopifyAdminGraphqlAppMetafieldsService
+    .getCartFreeProductAppMetafield(admin.graphql,SHOPIFY_CART_FREE_PRODUCT_APP_METAFIELDS_NAMESPACE, SHOPIFY_CART_FREE_PRODUCT_APP_FIRST_PRODUCT_METAFIELD_KEY)
+  const secondProductMetafieldResponse = await ShopifyAdminGraphqlAppMetafieldsService
+    .getCartFreeProductAppMetafield(admin.graphql,SHOPIFY_CART_FREE_PRODUCT_APP_METAFIELDS_NAMESPACE, SHOPIFY_CART_FREE_PRODUCT_APP_SECOND_PRODUCT_METAFIELD_KEY)
+  const freeProductMetafieldResponse = await ShopifyAdminGraphqlAppMetafieldsService
+    .getCartFreeProductAppMetafield(admin.graphql,SHOPIFY_CART_FREE_PRODUCT_APP_METAFIELDS_NAMESPACE, SHOPIFY_CART_FREE_PRODUCT_APP_FREE_PRODUCT_METAFIELD_KEY)
+  return defer({ products, productVariants, firstProductMetafieldResponse, secondProductMetafieldResponse, freeProductMetafieldResponse });
 };
 
 export const action = async ({ request }) => {
-  const { admin } = await authenticate.admin(request);
-  const color = ["Red", "Orange", "Yellow", "Green"][
-    Math.floor(Math.random() * 4)
-  ];
-  const response = await admin.graphql(
-    `#graphql
-      mutation populateProduct($input: ProductInput!) {
-        productCreate(input: $input) {
-          product {
-            id
-            title
-            handle
-            status
-            variants(first: 10) {
-              edges {
-                node {
-                  id
-                  price
-                  barcode
-                  createdAt
-                }
-              }
-            }
-          }
-        }
-      }`,
-    {
-      variables: {
-        input: {
-          title: `${color} Snowboard`,
-        },
-      },
-    },
-  );
-  const responseJson = await response.json();
-  const product = responseJson.data.productCreate.product;
-  const variantId = product.variants.edges[0].node.id;
-  const variantResponse = await admin.graphql(
-    `#graphql
-    mutation shopifyRemixTemplateUpdateVariant($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
-      productVariantsBulkUpdate(productId: $productId, variants: $variants) {
-        productVariants {
-          id
-          price
-          barcode
-          createdAt
-        }
-      }
-    }`,
-    {
-      variables: {
-        productId: product.id,
-        variants: [{ id: variantId, price: "100.00" }],
-      },
-    },
-  );
-  const variantResponseJson = await variantResponse.json();
 
-  return json({
-    product: responseJson.data.productCreate.product,
-    variant: variantResponseJson.data.productVariantsBulkUpdate.productVariants,
-  });
+  //Form data
+  const formData = await request.formData();
+  const product1 = formData.get("product1");
+  const product2 = formData.get("product2");
+  const freeProduct = formData.get("freeProduct");
+
+  // Admin API to store product IDs in metafields
+  const { admin } = await authenticate.admin(request);
+
+  //Discount operations
+  const discountCodeMetafieldResponse = await ShopifyAdminGraphqlAppMetafieldsService
+    .getCartFreeProductAppMetafield(admin.graphql, SHOPIFY_CART_FREE_PRODUCT_APP_METAFIELDS_NAMESPACE, SHOPIFY_CART_FREE_PRODUCT_APP_DISCOUNT_CODE_METAFIELD_KEY);
+
+  //Getting discount for delete operation
+  let discountCodeResponse = {};
+  if(discountCodeMetafieldResponse?.value) {
+    discountCodeResponse = await ShopifyAdminGraphqlAppDiscountService
+      .getDiscount(admin.graphql, discountCodeMetafieldResponse.value);
+  }
+
+  console.log(discountCodeResponse, 'AADDDD')
+  //Deleting discount if it exist
+  let deletedDiscountResponse = '';
+  if(discountCodeResponse?.automaticDiscountNode.id) {
+    deletedDiscountResponse = await ShopifyAdminGraphqlAppDiscountService
+      .deleteDiscount(admin.graphql, discountCodeResponse.automaticDiscountNode.id);
+  }
+
+  //Creating new discount
+  const discountResponse = await ShopifyAdminGraphqlAppDiscountService
+    .createDiscount(admin.graphql, [product1, product2], [freeProduct.split('&')[1]]);
+
+  
+  console.log(discountCodeResponse, 'DISCOUNT RESPONSE')
+  console.log(discountResponse, 'DISCOUNT CREATE RESPONSE')
+  console.dir(discountResponse, { depth: 10 })
+  //Creating or updating App metafields
+  const metafieldResponse = await ShopifyAdminGraphqlAppMetafieldsService
+    .createAppMetafield(admin.graphql,SHOPIFY_CART_FREE_PRODUCT_APP_METAFIELDS_NAMESPACE, [
+      {
+        key: SHOPIFY_CART_FREE_PRODUCT_APP_FIRST_PRODUCT_METAFIELD_KEY,
+        value: product1
+      },
+      {
+        key: SHOPIFY_CART_FREE_PRODUCT_APP_SECOND_PRODUCT_METAFIELD_KEY,
+        value: product2
+      },
+      {
+        key: SHOPIFY_CART_FREE_PRODUCT_APP_FREE_PRODUCT_METAFIELD_KEY,
+        value: freeProduct
+      },
+      {
+        key: SHOPIFY_CART_FREE_PRODUCT_APP_DISCOUNT_CODE_METAFIELD_KEY,
+        value: discountResponse?.discountAutomaticBxgyCreate?.automaticDiscountNode?.id
+      }
+    ]);
+
+    console.log(metafieldResponse, 'METAFIELD RESPONSE')
+  return json({ success: true, metafields: metafieldResponse });
 };
 
 export default function Index() {
-  const fetcher = useFetcher();
-  const shopify = useAppBridge();
-  const isLoading =
-    ["loading", "submitting"].includes(fetcher.state) &&
-    fetcher.formMethod === "POST";
-  const productId = fetcher.data?.product?.id.replace(
-    "gid://shopify/Product/",
-    "",
-  );
 
+  //loaders & fetchers
+  const fetcher = useFetcher();
+  const  {products, productVariants, firstProductMetafieldResponse, secondProductMetafieldResponse, freeProductMetafieldResponse} = useLoaderData();
+
+  //States
+  const [product1, setProduct1] = useState(firstProductMetafieldResponse?.value || '');
+  const [product2, setProduct2] = useState(secondProductMetafieldResponse?.value|| '');
+  const [freeProduct, setFreeProduct] = useState(freeProductMetafieldResponse?.value.split('&')[0]|| '');
+  const [freeProductVariant, setFreeProductVariant] = useState();
+
+  //Getting free product variant for cart operation
   useEffect(() => {
-    if (productId) {
-      shopify.toast.show("Product created");
-    }
-  }, [productId, shopify]);
-  const generateProduct = () => fetcher.submit({}, { method: "POST" });
+    const productVariant = productVariants.find(variant => variant.node.id === freeProduct)
+    setFreeProductVariant(productVariant?.node.variants.edges[0]?.node.id)
+  },[freeProduct])
+
+  //Submitting form
+  const handleSave = () => {
+    const formData = new FormData();
+    formData.append("product1", product1 || "");
+    formData.append("product2", product2 || "");
+    formData.append("freeProduct", `${freeProduct}&${freeProductVariant}` || "");
+
+    fetcher.submit(formData, { method: "post" });
+  };
 
   return (
-    <Page>
-      <TitleBar title="Remix app template">
-        <button variant="primary" onClick={generateProduct}>
-          Generate a product
-        </button>
-      </TitleBar>
+    <Page title="Configure Cart Rule">
+      <TitleBar title="Configure Cart Rule" />
       <BlockStack gap="500">
         <Layout>
           <Layout.Section>
             <Card>
               <BlockStack gap="500">
                 <BlockStack gap="200">
-                  <Text as="h2" variant="headingMd">
-                    Congrats on creating a new Shopify app 🎉
-                  </Text>
-                  <Text variant="bodyMd" as="p">
-                    This embedded app template uses{" "}
-                    <Link
-                      url="https://shopify.dev/docs/apps/tools/app-bridge"
-                      target="_blank"
-                      removeUnderline
-                    >
-                      App Bridge
-                    </Link>{" "}
-                    interface examples like an{" "}
-                    <Link url="/app/additional" removeUnderline>
-                      additional page in the app nav
-                    </Link>
-                    , as well as an{" "}
-                    <Link
-                      url="https://shopify.dev/docs/api/admin-graphql"
-                      target="_blank"
-                      removeUnderline
-                    >
-                      Admin GraphQL
-                    </Link>{" "}
-                    mutation demo, to provide a starting point for app
-                    development.
-                  </Text>
+                  <Select
+                    label="Tracked Product 1"
+                    options={products}
+                    onChange={setProduct1}
+                    value={product1}
+                    placeholder="Select first product"
+                  />
+                  <Select
+                    label="Tracked Product 2"
+                    options={products}
+                    onChange={setProduct2}
+                    value={product2}
+                    placeholder="Select second product"
+                  />
+                  <Select
+                    label="Free Product"
+                    options={products}
+                    onChange={setFreeProduct}
+                    value={freeProduct}
+                    placeholder="Select free product"
+                  />
                 </BlockStack>
-                <BlockStack gap="200">
-                  <Text as="h3" variant="headingMd">
-                    Get started with products
-                  </Text>
-                  <Text as="p" variant="bodyMd">
-                    Generate a product with GraphQL and get the JSON output for
-                    that product. Learn more about the{" "}
-                    <Link
-                      url="https://shopify.dev/docs/api/admin-graphql/latest/mutations/productCreate"
-                      target="_blank"
-                      removeUnderline
-                    >
-                      productCreate
-                    </Link>{" "}
-                    mutation in our API references.
-                  </Text>
-                </BlockStack>
-                <InlineStack gap="300">
-                  <Button loading={isLoading} onClick={generateProduct}>
-                    Generate a product
-                  </Button>
-                  {fetcher.data?.product && (
-                    <Button
-                      url={`shopify:admin/products/${productId}`}
-                      target="_blank"
-                      variant="plain"
-                    >
-                      View product
-                    </Button>
-                  )}
-                </InlineStack>
-                {fetcher.data?.product && (
-                  <>
-                    <Text as="h3" variant="headingMd">
-                      {" "}
-                      productCreate mutation
-                    </Text>
-                    <Box
-                      padding="400"
-                      background="bg-surface-active"
-                      borderWidth="025"
-                      borderRadius="200"
-                      borderColor="border"
-                      overflowX="scroll"
-                    >
-                      <pre style={{ margin: 0 }}>
-                        <code>
-                          {JSON.stringify(fetcher.data.product, null, 2)}
-                        </code>
-                      </pre>
-                    </Box>
-                    <Text as="h3" variant="headingMd">
-                      {" "}
-                      productVariantsBulkUpdate mutation
-                    </Text>
-                    <Box
-                      padding="400"
-                      background="bg-surface-active"
-                      borderWidth="025"
-                      borderRadius="200"
-                      borderColor="border"
-                      overflowX="scroll"
-                    >
-                      <pre style={{ margin: 0 }}>
-                        <code>
-                          {JSON.stringify(fetcher.data.variant, null, 2)}
-                        </code>
-                      </pre>
-                    </Box>
-                  </>
-                )}
+
+                <Button onClick={handleSave}>Save Configuration</Button>
+
+                {fetcher.data?.success && <p>Configuration saved successfully!</p>}
               </BlockStack>
             </Card>
-          </Layout.Section>
-          <Layout.Section variant="oneThird">
-            <BlockStack gap="500">
-              <Card>
-                <BlockStack gap="200">
-                  <Text as="h2" variant="headingMd">
-                    App template specs
-                  </Text>
-                  <BlockStack gap="200">
-                    <InlineStack align="space-between">
-                      <Text as="span" variant="bodyMd">
-                        Framework
-                      </Text>
-                      <Link
-                        url="https://remix.run"
-                        target="_blank"
-                        removeUnderline
-                      >
-                        Remix
-                      </Link>
-                    </InlineStack>
-                    <InlineStack align="space-between">
-                      <Text as="span" variant="bodyMd">
-                        Database
-                      </Text>
-                      <Link
-                        url="https://www.prisma.io/"
-                        target="_blank"
-                        removeUnderline
-                      >
-                        Prisma
-                      </Link>
-                    </InlineStack>
-                    <InlineStack align="space-between">
-                      <Text as="span" variant="bodyMd">
-                        Interface
-                      </Text>
-                      <span>
-                        <Link
-                          url="https://polaris.shopify.com"
-                          target="_blank"
-                          removeUnderline
-                        >
-                          Polaris
-                        </Link>
-                        {", "}
-                        <Link
-                          url="https://shopify.dev/docs/apps/tools/app-bridge"
-                          target="_blank"
-                          removeUnderline
-                        >
-                          App Bridge
-                        </Link>
-                      </span>
-                    </InlineStack>
-                    <InlineStack align="space-between">
-                      <Text as="span" variant="bodyMd">
-                        API
-                      </Text>
-                      <Link
-                        url="https://shopify.dev/docs/api/admin-graphql"
-                        target="_blank"
-                        removeUnderline
-                      >
-                        GraphQL API
-                      </Link>
-                    </InlineStack>
-                  </BlockStack>
-                </BlockStack>
-              </Card>
-              <Card>
-                <BlockStack gap="200">
-                  <Text as="h2" variant="headingMd">
-                    Next steps
-                  </Text>
-                  <List>
-                    <List.Item>
-                      Build an{" "}
-                      <Link
-                        url="https://shopify.dev/docs/apps/getting-started/build-app-example"
-                        target="_blank"
-                        removeUnderline
-                      >
-                        {" "}
-                        example app
-                      </Link>{" "}
-                      to get started
-                    </List.Item>
-                    <List.Item>
-                      Explore Shopify’s API with{" "}
-                      <Link
-                        url="https://shopify.dev/docs/apps/tools/graphiql-admin-api"
-                        target="_blank"
-                        removeUnderline
-                      >
-                        GraphiQL
-                      </Link>
-                    </List.Item>
-                  </List>
-                </BlockStack>
-              </Card>
-            </BlockStack>
           </Layout.Section>
         </Layout>
       </BlockStack>
     </Page>
   );
 }
+

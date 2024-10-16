@@ -1,0 +1,10 @@
+{
+  "cart_free_product": {
+    "name": "Cart Free product",
+    "settings": {
+      "cart_items_wrapper_classname": {
+        "label": "Cart items wrapper class name"
+      }
+    }
+  }
+}
